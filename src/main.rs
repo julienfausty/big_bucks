@@ -1,5 +1,8 @@
 pub mod fetch;
 
-fn main() {
+#[tokio::main]
+async fn main() -> Result<(), String> {
     println!("Hello, world!");
+
+    Ok(())
 }
