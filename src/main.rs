@@ -2,8 +2,10 @@ use core::f64;
 
 use plotters::prelude::*;
 
-pub mod fetch;
-use fetch::{MarketChart, MarketChartQuery, query_market_chart};
+mod fetch;
+use fetch::{MarketChartQuery, query_market_chart};
+
+mod interp;
 
 fn plot_simple_normalized_prices(prices: Vec<Vec<(u64, f64)>>) {
     let prices: Vec<_> = prices
