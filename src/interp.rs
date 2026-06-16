@@ -28,7 +28,7 @@ pub fn rebase(series: Vec<Vec<(u64, f64)>>) -> Result<RebasedSeries, String> {
                 .map(|(t, _)| (*t).clone())
                 .filter(|t| *t >= t_range.0 && *t <= t_range.1),
         );
-        acc.intersection(&chart_set).map(|t| t.clone()).collect()
+        acc.union(&chart_set).map(|t| t.clone()).collect()
     });
 
     let timeline = (|| {
@@ -38,35 +38,109 @@ pub fn rebase(series: Vec<Vec<(u64, f64)>>) -> Result<RebasedSeries, String> {
     })();
 
     match Array::from_shape_vec(
-        (timeline.len(), series.len()),
+        (series.len(), timeline.len()),
         series
             .into_iter()
             .map(|mut chart| {
                 chart.sort_by(|l, r| l.0.cmp(&r.0));
                 let mut i_chart = 0;
-                timeline
+                let interp = timeline
                     .iter()
                     .map(|t| {
                         for j_chart in i_chart..(chart.len() - 1) {
-                            if (chart[j_chart].0 <= *t) && (chart[j_chart + 1].0 > *t) {
+                            if (chart[j_chart].0 <= *t) && (chart[j_chart + 1].0 >= *t) {
                                 i_chart = j_chart;
                                 let width = (chart[j_chart + 1].0 - chart[j_chart].0) as f64;
-                                return chart[j_chart].1 * ((*t - chart[j_chart].0) as f64 / width)
-                                    + chart[j_chart + 1].1
-                                        * ((chart[j_chart + 1].0 - *t) as f64 / width);
+                                let weight = (*t - chart[j_chart].0) as f64 / width;
+
+                                return chart[j_chart].1 * (1.0 - weight)
+                                    + chart[j_chart + 1].1 * weight;
                             }
                         }
 
                         0.0
                     })
-                    .collect::<Vec<f64>>()
+                    .collect::<Vec<f64>>();
+                interp
             })
             .fold(Vec::new(), |acc, rebased| [acc, rebased].concat()),
     ) {
         Ok(values) => Ok(RebasedSeries {
             time: Array::from_vec(timeline),
-            series: values,
+            series: values.reversed_axes(),
         }),
         Err(message) => Err(format!("{}", message)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+
+    use std::iter::zip;
+
+    const EPS: f64 = 1e-12;
+
+    #[test]
+    fn test_rebase_simple() {
+        let simple_data = vec![
+            vec![(0, 1.0), (1, 2.0), (3, 4.0), (5, 6.0)],
+            vec![(2, 3.0), (4, 5.0), (7, 8.0)],
+        ];
+
+        let rebased = rebase(simple_data);
+        assert!(rebased.is_ok());
+
+        let rebased = rebased.unwrap();
+
+        assert!(zip(rebased.time.into_iter(), vec![2, 3, 4, 5].into_iter()).all(|(l, r)| l == r));
+
+        assert!(
+            (Array::from_shape_vec((4, 2), vec![3.0, 3.0, 4.0, 4.0, 5.0, 5.0, 6.0, 6.0]).unwrap()
+                - rebased.series)
+                .map(|element: &f64| element.powf(2.0))
+                .sum()
+                < EPS
+        );
+    }
+
+    #[test]
+    fn test_rebase_single() {
+        let single_data = vec![vec![(0, 1.0), (1, 2.0), (3, 4.0), (5, 6.0)]];
+
+        let rebased = rebase(single_data);
+        assert!(rebased.is_ok());
+
+        let rebased = rebased.unwrap();
+
+        assert!(zip(rebased.time.into_iter(), vec![0, 1, 3, 5].into_iter()).all(|(l, r)| l == r));
+
+        assert!(
+            (Array::from_shape_vec((4, 1), vec![1.0, 2.0, 4.0, 6.0]).unwrap() - rebased.series)
+                .map(|element: &f64| element.powf(2.0))
+                .sum()
+                < EPS
+        );
+    }
+
+    #[test]
+    fn test_rebase_empty() {
+        let empty_data = Vec::new();
+
+        let rebased = rebase(empty_data);
+        assert!(rebased.is_ok());
+
+        let rebased = rebased.unwrap();
+        assert!(rebased.time.is_empty());
+        assert!(rebased.series.shape()[0] == 0);
+        assert!(rebased.series.shape()[1] == 0);
+    }
+
+    #[test]
+    fn test_rebase_zero_time_range() {
+        let single_data = vec![vec![(1, 1.0), (1, 2.0)]];
+
+        assert!(rebase(single_data).is_err());
     }
 }
