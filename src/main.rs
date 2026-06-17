@@ -10,6 +10,8 @@ use fetch::{MarketChartQuery, query_market_chart};
 mod interp;
 use interp::rebase;
 
+mod regression;
+
 fn plot_simple_normalized_prices(prices: Vec<Vec<(u64, f64)>>) {
     let prices: Vec<_> = prices
         .into_iter()
