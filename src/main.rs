@@ -1,11 +1,14 @@
 use core::f64;
 
+use ndarray::{Array2, s};
+
 use plotters::prelude::*;
 
 mod fetch;
 use fetch::{MarketChartQuery, query_market_chart};
 
 mod interp;
+use interp::rebase;
 
 fn plot_simple_normalized_prices(prices: Vec<Vec<(u64, f64)>>) {
     let prices: Vec<_> = prices
@@ -64,6 +67,87 @@ fn plot_simple_normalized_prices(prices: Vec<Vec<(u64, f64)>>) {
     for series in normalized.into_iter() {
         ctx.draw_series(LineSeries::new(series, &GREEN)).unwrap();
     }
+
+    root_area
+        .present()
+        .expect("Failed to write simple price plot to file.");
+}
+
+fn plot_scatter_w_histograms(series: Array2<f64>) {
+    if series.shape()[1] != 2 {
+        panic!("Cannot scatter plot with histograms for more than 2 series.");
+    }
+
+    let x_range = series
+        .slice(s![.., 0])
+        .fold((f64::INFINITY, 0.0), |acc, val| {
+            (val.min(acc.0), val.max(acc.1))
+        });
+
+    let y_range = series
+        .slice(s![.., 1])
+        .fold((f64::INFINITY, 0.0), |acc, val| {
+            (val.min(acc.0), val.max(acc.1))
+        });
+
+    let root_area = BitMapBackend::new("/tmp/scatter_prices.png", (1200, 800)).into_drawing_area();
+    root_area.fill(&WHITE).unwrap();
+
+    let areas = root_area.split_by_breakpoints([1000], [200]);
+
+    let mut x_hist_ctx = ChartBuilder::on(&areas[0])
+        .y_label_area_size(40)
+        .build_cartesian_2d(
+            (x_range.0..x_range.1)
+                .step((x_range.1 - x_range.0) / 50.0)
+                .use_round()
+                .into_segmented(),
+            0..(series.shape()[0] / 10),
+        )
+        .unwrap();
+
+    let mut y_hist_ctx = ChartBuilder::on(&areas[3])
+        .x_label_area_size(40)
+        .build_cartesian_2d(
+            0..(series.shape()[0] / 10),
+            (y_range.0..y_range.1)
+                .step((y_range.1 - y_range.0) / 50.0)
+                .use_round(),
+        )
+        .unwrap();
+
+    let mut scatter_ctx = ChartBuilder::on(&areas[2])
+        .x_label_area_size(40)
+        .y_label_area_size(40)
+        .build_cartesian_2d(x_range.0..x_range.1, y_range.0..y_range.1)
+        .unwrap();
+
+    scatter_ctx.configure_mesh().draw().unwrap();
+
+    scatter_ctx
+        .draw_series(
+            series
+                .axis_iter(ndarray::Axis(0))
+                .map(|view| Circle::new((view[0], view[1]), 2, &GREEN)),
+        )
+        .unwrap();
+
+    let x_hist = Histogram::vertical(&x_hist_ctx)
+        .style(GREEN.filled())
+        .margin(0)
+        .data(series.slice(s![.., 0]).iter().map(|val| (*val, 1)));
+
+    let y_hist = Histogram::horizontal(&y_hist_ctx)
+        .style(GREEN.filled())
+        .margin(0)
+        .data(series.slice(s![.., 1]).iter().map(|val| (*val, 1)));
+
+    x_hist_ctx.draw_series(x_hist).unwrap();
+    y_hist_ctx.draw_series(y_hist).unwrap();
+
+    root_area
+        .present()
+        .expect("Failed to write scatter plot to file.");
 }
 
 #[tokio::main]
@@ -90,7 +174,11 @@ async fn main() -> Result<(), String> {
 
     let wrapped = vec![bitcoin_chart.prices.clone(), ethereum_chart.prices.clone()];
 
-    plot_simple_normalized_prices(wrapped);
+    plot_simple_normalized_prices(wrapped.clone());
+
+    let rebased = rebase(wrapped).expect("Failed to rebase charts onto single timeline.");
+
+    plot_scatter_w_histograms(rebased.series);
 
     Ok(())
 }
