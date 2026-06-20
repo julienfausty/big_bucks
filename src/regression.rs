@@ -1,10 +1,12 @@
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2, par_azip, s};
-use ndarray_linalg::{FactorizeInto, Inverse};
+use ndarray_linalg::{InverseInto, SVDInto};
 
 use std::f64::consts::PI;
 
 const MAX_LAG: usize = 20;
+const EPS: f64 = 1e-16;
 
+#[derive(Debug)]
 pub struct RegressionSolution {
     pub solution: Array2<f64>,
     pub variance: f64,
@@ -42,7 +44,7 @@ pub fn autoregress(
     }
 
     let mut differences = Array2::<f64>::zeros((series.shape()[0] - 1, series.shape()[1]));
-    par_azip!((d in differences.view_mut(), s0 in series.slice(s![1.., ..]), s1 in series.slice(s![..-1, ..])) *d = s1 - s0);
+    par_azip!((d in differences.view_mut(), s0 in series.slice(s![..-1, ..]), s1 in series.slice(s![1.., ..])) *d = s1 - s0);
 
     let design_shape = (
         differences.shape()[0] - (lag + 1),
@@ -52,35 +54,37 @@ pub fn autoregress(
 
     *design_matrix.slice_mut(s![.., 0]) += 1.0;
 
-    par_azip!((dm in design_matrix.slice_mut(s![.., 1]), t in timeline.slice(s![..design_shape.0])) *dm += t);
+    par_azip!((dm in design_matrix.slice_mut(s![.., 1]), t in timeline.slice(s![timeline.len()-design_shape.0..])) *dm += t);
 
-    par_azip!((dm in design_matrix.slice_mut(s![.., 2..2+series.shape()[1]]), val in series.slice(s![1..design_shape.0 + 1, ..])) *dm += val);
+    par_azip!((dm in design_matrix.slice_mut(s![.., 2..2+series.shape()[1]]), val in series.slice(s![(series.shape()[0] - design_shape.0 - 1)..(series.shape()[0]-1), ..])) *dm += val);
 
     for i_diff in 0..lag {
         let design_index_range = (
             (3 + i_diff) * series.shape()[1],
             (4 + i_diff) * series.shape()[1],
         );
-        par_azip!((dm in design_matrix.slice_mut(s![.., design_index_range.0..design_index_range.1]), diff in differences.slice(s![(1+i_diff)..(design_shape.0 + i_diff + 1), ..])) *dm += diff);
+        let diff_slice_range = (
+            differences.shape()[0] - i_diff - 1 - design_shape.0,
+            differences.shape()[0] - i_diff - 1,
+        );
+        par_azip!((dm in design_matrix.slice_mut(s![.., design_index_range.0..design_index_range.1]), diff in differences.slice(s![diff_slice_range.0..diff_slice_range.1, ..])) *dm += diff);
     }
 
     let observations = design_matrix
         .t()
-        .dot(&differences.slice(s![..design_shape.0, ..]));
+        .dot(&differences.slice(s![(differences.shape()[0] - design_shape.0).., ..]));
 
-    let inv_gram_matrix = match (design_matrix.t().dot(&design_matrix)).factorize_into() {
-        Ok(factorized) => match factorized.inv() {
-            Ok(inverse) => inverse,
-            Err(message) => {
-                return Err(format!(
-                    "Failed to inverse matrix after factorization in autoregression:\n{}",
-                    message
-                ));
-            }
-        },
+    let inv_gram_matrix = match (design_matrix.t().dot(&design_matrix)).svd_into(true, true) {
+        Ok((u, diag, vt)) => {
+            let inv_diag = diag.map(|elem| if *elem > EPS { 1.0 / *elem } else { *elem });
+            vt.unwrap()
+                .t()
+                .dot(&Array2::from_diag(&inv_diag))
+                .dot(&u.unwrap().t())
+        }
         Err(message) => {
             return Err(format!(
-                "Failed LU factorization in autoregression:\n{}",
+                "Failed SVD factorization in autoregression:\n{}",
                 message
             ));
         }
@@ -88,7 +92,8 @@ pub fn autoregress(
 
     let solution_vec = inv_gram_matrix.dot(&observations).to_owned();
 
-    let residuals = design_matrix.dot(&solution_vec) - differences.slice(s![..design_shape.0, ..]);
+    let residuals = design_matrix.dot(&solution_vec)
+        - differences.slice(s![(differences.shape()[0] - design_shape.0).., ..]);
 
     let variance = residuals
         .rows()
@@ -168,5 +173,148 @@ pub fn check_augmented_dicky_fuller<S: IntoIterator<Item = f64>>(
             })
         }
         None => Err("No lag value generated a regression solution.".to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+
+    use ndarray::{Array, azip};
+    use ndarray_rand::RandomExt;
+    use ndarray_rand::rand_distr::Normal;
+
+    #[test]
+    fn linear_autoregression() {
+        let timeline = Array1::from_vec(vec![0.0, 0.1, 0.2, 0.3, 0.4]);
+        let series = Array2::from_shape_vec((5, 1), vec![1.0, 1.1, 1.2, 1.3, 1.4]).unwrap();
+
+        let regression_0 = autoregress(0, timeline.view(), series.view());
+
+        assert!(regression_0.is_ok());
+
+        let regression_0 = regression_0.unwrap();
+        assert!(regression_0.variance < EPS);
+
+        assert!(regression_0.residuals.into_iter().sum::<f64>().powf(2.0) < EPS);
+
+        let regression_1 = autoregress(1, timeline.view(), series.view());
+
+        assert!(regression_1.is_ok());
+
+        let regression_1 = regression_1.unwrap();
+        assert!(regression_1.variance < EPS);
+
+        assert!(regression_1.residuals.into_iter().sum::<f64>().powf(2.0) < EPS);
+    }
+
+    #[test]
+    fn lag_too_large() {
+        let timeline = Array1::from_vec(vec![0.0, 0.1, 0.2, 0.3, 0.4]);
+        let series = Array2::from_shape_vec((5, 1), vec![1.0, 1.1, 1.2, 1.3, 1.4]).unwrap();
+
+        let regression = autoregress(3, timeline.view(), series.view());
+
+        assert!(regression.is_ok());
+
+        let regression = autoregress(4, timeline.view(), series.view());
+
+        assert!(regression.is_err());
+    }
+
+    #[test]
+    fn shape_mismatch() {
+        let timeline = Array1::from_vec(vec![0.0, 0.1, 0.2, 0.3]);
+        let series = Array2::from_shape_vec((5, 1), vec![1.0, 1.1, 1.2, 1.3, 1.4]).unwrap();
+
+        let regression = autoregress(0, timeline.view(), series.view());
+
+        assert!(regression.is_err());
+    }
+
+    #[test]
+    fn test_random_autoregression() {
+        let length = 100000;
+        let timeline = Array1::<f64>::linspace(0.0, 1.0, length);
+        let series = Array::random((length, 1), Normal::new(0.0, 1.0).unwrap());
+
+        let autoregression = autoregress(0, timeline.view(), series.view());
+
+        assert!(autoregression.is_ok());
+
+        let autoregression = autoregression.unwrap();
+
+        let expected_tolerance = 1.0 / (length as f64).sqrt();
+
+        assert!((1.0 - autoregression.variance).powf(2.0) < expected_tolerance);
+        assert!(autoregression.solution[[0, 0]].powf(2.0) < expected_tolerance);
+        assert!(autoregression.solution[[1, 0]].powf(2.0) < expected_tolerance);
+        assert!((1.0 + autoregression.solution[[2, 0]]).powf(2.0) < expected_tolerance);
+
+        let autoregression = autoregress(1, timeline.view(), series.view());
+
+        assert!(autoregression.is_ok());
+
+        let autoregression = autoregression.unwrap();
+
+        let expected_tolerance = 1.0 / (length as f64).sqrt();
+
+        assert!((1.0 - autoregression.variance).powf(2.0) < expected_tolerance);
+        assert!(autoregression.solution[[0, 0]].powf(2.0) < expected_tolerance);
+        assert!(autoregression.solution[[1, 0]].powf(2.0) < expected_tolerance);
+        assert!((1.0 + autoregression.solution[[2, 0]]).powf(2.0) < expected_tolerance);
+        assert!(autoregression.solution[[3, 0]].powf(2.0) < expected_tolerance);
+
+        let autoregression = autoregress(7, timeline.view(), series.view());
+
+        assert!(autoregression.is_ok());
+
+        let autoregression = autoregression.unwrap();
+
+        let expected_tolerance = 1.0 / (length as f64).sqrt();
+
+        assert!((1.0 - autoregression.variance).powf(2.0) < expected_tolerance);
+        assert!(autoregression.solution[[0, 0]].powf(2.0) < expected_tolerance);
+        assert!(autoregression.solution[[1, 0]].powf(2.0) < expected_tolerance);
+        assert!((1.0 + autoregression.solution[[2, 0]]).powf(2.0) < expected_tolerance);
+        assert!(autoregression.solution[[3, 0]].powf(2.0) < expected_tolerance);
+        assert!(autoregression.solution[[4, 0]].powf(2.0) < expected_tolerance);
+        assert!(autoregression.solution[[5, 0]].powf(2.0) < expected_tolerance);
+        assert!(autoregression.solution[[6, 0]].powf(2.0) < expected_tolerance);
+    }
+
+    #[test]
+    fn test_noisy_linear_autoregression() {
+        let length = 100000;
+        let timeline = Array1::<f64>::linspace(0.0, 1.0, length);
+        let series: Array2<f64> = Array::random((length, 1), Normal::new(0.0, 1.0).unwrap())
+            + 0.1 * timeline.clone().to_shape((length, 1)).unwrap()
+            + 3.14;
+
+        let autoregression = autoregress(0, timeline.view(), series.view());
+
+        assert!(autoregression.is_ok());
+
+        let autoregression = autoregression.unwrap();
+
+        let expected_tolerance = 1.0 / (length as f64).sqrt();
+
+        assert!((1.0 - autoregression.variance).powf(2.0) < expected_tolerance);
+        assert!((3.14 - autoregression.solution[[0, 0]]).powf(2.0) < expected_tolerance);
+        assert!((0.1 - autoregression.solution[[1, 0]]).powf(2.0) < expected_tolerance);
+        assert!((1.0 + autoregression.solution[[2, 0]]).powf(2.0) < expected_tolerance);
+
+        let autoregression = autoregress(1, timeline.view(), series.view());
+
+        assert!(autoregression.is_ok());
+
+        let autoregression = autoregression.unwrap();
+
+        assert!((1.0 - autoregression.variance).powf(2.0) < expected_tolerance);
+        assert!((3.14 - autoregression.solution[[0, 0]]).powf(2.0) < expected_tolerance);
+        assert!((0.1 - autoregression.solution[[1, 0]]).powf(2.0) < expected_tolerance);
+        assert!((1.0 + autoregression.solution[[2, 0]]).powf(2.0) < expected_tolerance);
+        assert!(autoregression.solution[[3, 0]].powf(2.0) < expected_tolerance);
     }
 }
