@@ -110,6 +110,7 @@ pub fn autoregress(
     })
 }
 
+#[derive(Debug)]
 pub struct ADFCheck {
     pub criterion: f64,
     pub gamma: f64,
@@ -181,7 +182,7 @@ mod tests {
 
     use super::*;
 
-    use ndarray::{Array, azip};
+    use ndarray::Array;
     use ndarray_rand::RandomExt;
     use ndarray_rand::rand_distr::Normal;
 
@@ -316,5 +317,102 @@ mod tests {
         assert!((0.1 - autoregression.solution[[1, 0]]).powf(2.0) < expected_tolerance);
         assert!((1.0 + autoregression.solution[[2, 0]]).powf(2.0) < expected_tolerance);
         assert!(autoregression.solution[[3, 0]].powf(2.0) < expected_tolerance);
+    }
+
+    #[test]
+    fn test_random_walk_autoregression() {
+        let length = 100000;
+        let timeline = Array1::<f64>::linspace(0.0, 1.0, length);
+        let mut series: Array2<f64> = Array::random((length, 1), Normal::new(0.0, 1.0).unwrap())
+            + 0.1 * timeline.clone().to_shape((length, 1)).unwrap()
+            + 3.14;
+
+        for i_series in 0..(length - 1) {
+            series[[i_series + 1, 0]] += series[[i_series, 0]]
+        }
+
+        let autoregression = autoregress(0, timeline.view(), series.view());
+
+        assert!(autoregression.is_ok());
+
+        let autoregression = autoregression.unwrap();
+
+        let expected_tolerance = 1.0 / (length as f64).sqrt();
+
+        assert!((1.0 - autoregression.variance).powf(2.0) < expected_tolerance);
+        assert!((3.14 - autoregression.solution[[0, 0]]).powf(2.0) < expected_tolerance);
+        assert!(autoregression.solution[[2, 0]].powf(2.0) < expected_tolerance);
+
+        let autoregression = autoregress(1, timeline.view(), series.view());
+
+        assert!(autoregression.is_ok());
+
+        let autoregression = autoregression.unwrap();
+
+        assert!((1.0 - autoregression.variance).powf(2.0) < expected_tolerance);
+        assert!((3.14 - autoregression.solution[[0, 0]]).powf(2.0) < expected_tolerance);
+        assert!(autoregression.solution[[2, 0]].powf(2.0) < expected_tolerance);
+        assert!(autoregression.solution[[3, 0]].powf(2.0) < expected_tolerance);
+    }
+
+    #[test]
+    fn random_adf() {
+        let length = 100000;
+        let timeline = Array1::<f64>::linspace(0.0, 1.0, length);
+        let series = Array::random(length, Normal::new(0.0, 1.0).unwrap());
+
+        let checked = check_augmented_dicky_fuller(timeline, series);
+
+        assert!(checked.is_ok());
+
+        let checked = checked.unwrap();
+
+        assert!(checked.criterion < -3.96);
+
+        let expected_tolerance = 1.0 / (length as f64).sqrt();
+        assert!((1.0 + checked.gamma).powf(2.0) < expected_tolerance);
+        assert_eq!(checked.lag, 0);
+    }
+
+    #[test]
+    fn test_noisy_linear_adf() {
+        let length = 100000;
+        let timeline = Array1::<f64>::linspace(0.0, 1.0, length);
+        let series: Array1<f64> =
+            Array::random(length, Normal::new(0.0, 1.0).unwrap()) + 0.1 * timeline.clone() + 3.14;
+
+        let checked = check_augmented_dicky_fuller(timeline, series);
+
+        assert!(checked.is_ok());
+
+        let checked = checked.unwrap();
+
+        assert!(checked.criterion < -3.96);
+
+        let expected_tolerance = 1.0 / (length as f64).sqrt();
+        assert!((1.0 + checked.gamma).powf(2.0) < expected_tolerance);
+        assert_eq!(checked.lag, 0);
+    }
+
+    #[test]
+    fn test_random_walk_adf() {
+        let length = 100000;
+        let timeline = Array1::<f64>::linspace(0.0, 1.0, length);
+        let mut series: Array1<f64> =
+            Array::random(length, Normal::new(0.0, 1.0).unwrap()) + 0.1 * timeline.clone() + 3.14;
+        for i_series in 0..(length - 1) {
+            series[[i_series + 1]] += series[[i_series]]
+        }
+
+        let checked = check_augmented_dicky_fuller(timeline, series);
+
+        assert!(checked.is_ok());
+
+        let checked = checked.unwrap();
+
+        assert!(checked.criterion > -3.96);
+        let expected_tolerance = 1.0 / (length as f64).sqrt();
+        assert!(checked.gamma.powf(2.0) < expected_tolerance);
+        assert_eq!(checked.lag, 0);
     }
 }
