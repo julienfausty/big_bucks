@@ -1,5 +1,5 @@
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2, par_azip, s};
-use ndarray_linalg::{InverseInto, SVDInto};
+use ndarray_linalg::SVDInto;
 
 use std::f64::consts::PI;
 
@@ -48,7 +48,7 @@ pub fn autoregress(
 
     let design_shape = (
         differences.shape()[0] - (lag + 1),
-        (3 + lag) * series.shape()[1],
+        2 + (1 + lag) * series.shape()[1],
     );
     let mut design_matrix = Array2::<f64>::zeros(design_shape.clone());
 
@@ -60,8 +60,8 @@ pub fn autoregress(
 
     for i_diff in 0..lag {
         let design_index_range = (
-            (3 + i_diff) * series.shape()[1],
-            (4 + i_diff) * series.shape()[1],
+            2 + (1 + i_diff) * series.shape()[1],
+            2 + (2 + i_diff) * series.shape()[1],
         );
         let diff_slice_range = (
             differences.shape()[0] - i_diff - 1 - design_shape.0,
@@ -100,7 +100,7 @@ pub fn autoregress(
         .into_iter()
         .map(|row| row.into_iter().map(|val| val.powf(2.0)).sum::<f64>())
         .sum::<f64>()
-        / (design_shape.0 as f64);
+        / (residuals.len() as f64);
 
     Ok(RegressionSolution {
         solution: solution_vec,
@@ -183,6 +183,7 @@ mod tests {
     use super::*;
 
     use ndarray::Array;
+    use ndarray_linalg::SVDInto;
     use ndarray_rand::RandomExt;
     use ndarray_rand::rand_distr::Normal;
 
@@ -353,6 +354,59 @@ mod tests {
         assert!((3.14 - autoregression.solution[[0, 0]]).powf(2.0) < expected_tolerance);
         assert!(autoregression.solution[[2, 0]].powf(2.0) < expected_tolerance);
         assert!(autoregression.solution[[3, 0]].powf(2.0) < expected_tolerance);
+    }
+
+    #[test]
+    fn test_multi_dimensional_autoregression() {
+        let length = 100000;
+        let timeline = Array1::<f64>::linspace(0.0, 1.0, length);
+        let mut series: Array2<f64> = Array::random((length, 3), Normal::new(0.0, 1.0).unwrap())
+            + timeline
+                .clone()
+                .to_shape((length, 1))
+                .unwrap()
+                .dot(&Array2::from_shape_vec((1, 3), vec![0.1, 0.2, 0.3]).unwrap())
+            + 3.14;
+
+        for i_series in 0..(length - 1) {
+            series[[i_series + 1, 0]] += series[[i_series, 0]];
+            series[[i_series + 1, 1]] += 0.2 * series[[i_series, 0]];
+            series[[i_series + 1, 2]] += 1.3 * series[[i_series, 0]];
+        }
+
+        let autoregression = autoregress(3, timeline.view(), series.view());
+
+        assert!(autoregression.is_ok());
+
+        let autoregression = autoregression.unwrap();
+
+        let expected_tolerance = 1.0 / (length as f64).sqrt();
+
+        assert!((1.0 - autoregression.variance).powf(2.0) < expected_tolerance);
+        assert!(
+            (3.14 - autoregression.solution.slice(s![0, ..]).sum() / 3.0).powf(2.0)
+                < expected_tolerance
+        );
+
+        let (_, svd, _) = autoregression
+            .solution
+            .slice(s![2.., ..])
+            .to_owned()
+            .svd_into(false, false)
+            .unwrap();
+
+        assert_eq!(
+            svd.fold(0, |rank: usize, val: &f64| {
+                if val.powf(2.0) > expected_tolerance {
+                    rank + 1
+                } else {
+                    rank
+                }
+            }),
+            2
+        );
+
+        assert!(autoregression.solution.slice(s![5.., ..]).sum().powf(2.0) < expected_tolerance);
     }
 
     #[test]
