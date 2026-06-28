@@ -1,6 +1,6 @@
 use core::f64;
 
-use ndarray::{Array2, s};
+use ndarray::{Array1, Array2, s};
 
 use plotters::prelude::*;
 
@@ -12,6 +12,8 @@ use interp::rebase;
 
 mod regression;
 use regression::check_augmented_dicky_fuller;
+
+const ADF_THRESHOLD: f64 = -0.5;
 
 fn plot_simple_normalized_prices(prices: Vec<Vec<(u64, f64)>>) {
     let prices: Vec<_> = prices
@@ -153,6 +155,70 @@ fn plot_scatter_w_histograms(series: Array2<f64>) {
         .expect("Failed to write scatter plot to file.");
 }
 
+fn plot_histograms(values: Vec<Array1<f64>>) {
+    let x_range = values
+        .iter()
+        .fold((f64::INFINITY, -f64::INFINITY), |range, array| {
+            let minmax = (
+                array.iter().fold(
+                    f64::INFINITY,
+                    |min, val| if *val < min { *val } else { min },
+                ),
+                array.iter().fold(
+                    -f64::INFINITY,
+                    |max, val| if *val > max { *val } else { max },
+                ),
+            );
+            (
+                if minmax.0 < range.0 {
+                    minmax.0
+                } else {
+                    range.0
+                },
+                if minmax.1 > range.1 {
+                    minmax.1
+                } else {
+                    range.1
+                },
+            )
+        });
+
+    let max_len = values.iter().fold(
+        0,
+        |len, array| if array.len() > len { array.len() } else { len },
+    );
+
+    let root_area = BitMapBackend::new("/tmp/histograms.png", (1200, 800)).into_drawing_area();
+    root_area.fill(&WHITE).unwrap();
+
+    let mut hist_ctx = ChartBuilder::on(&root_area)
+        .set_label_area_size(LabelAreaPosition::Left, 40)
+        .set_label_area_size(LabelAreaPosition::Bottom, 40)
+        .build_cartesian_2d(
+            (x_range.0..x_range.1)
+                .step((x_range.1 - x_range.0) / 100.0)
+                .use_round()
+                .into_segmented(),
+            0..max_len,
+        )
+        .unwrap();
+
+    hist_ctx.configure_mesh().draw().unwrap();
+
+    let colors = vec![GREEN, RED, BLUE, YELLOW];
+
+    let mut i_color = 0;
+    for series in values.into_iter() {
+        let hist = Histogram::vertical(&hist_ctx)
+            .style(colors[i_color].mix(0.5).filled())
+            .margin(0)
+            .data(series.iter().map(|val| (*val, 1)));
+        i_color = (i_color + 1) % colors.len();
+
+        hist_ctx.draw_series(hist).unwrap();
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), String> {
     let bitcoin_chart = query_market_chart(MarketChartQuery {
@@ -197,8 +263,21 @@ async fn main() -> Result<(), String> {
     .map(|(time_view, val_view)| check_augmented_dicky_fuller(time_view, val_view).unwrap())
     .collect();
 
-    println!("Bitcoin ADF check: \n{:?}\n", adf_checks[0]);
-    println!("Ethereum ADF check: \n{:?}", adf_checks[1]);
+    println!("Bitcoin ADF check: \n{:?}\n", adf_checks[0].criterion);
+    println!("Ethereum ADF check: \n{:?}", adf_checks[1].criterion);
+
+    if adf_checks[0].criterion < ADF_THRESHOLD || adf_checks[1].criterion < ADF_THRESHOLD {
+        return Err("Failed integrated of order 1 checks for one of the series.".to_string());
+    }
+
+    plot_histograms(
+        adf_checks
+            .into_iter()
+            .map(|check| {
+                check.regression.residuals.flatten().to_owned() / check.regression.variance.sqrt()
+            })
+            .collect(),
+    );
 
     Ok(())
 }
