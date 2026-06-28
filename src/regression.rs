@@ -1,5 +1,6 @@
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2, par_azip, s};
 use ndarray_linalg::SVDInto;
+use statrs::distribution::{ChiSquared, ContinuousCDF};
 
 use std::f64::consts::PI;
 
@@ -168,6 +169,109 @@ pub fn check_augmented_dicky_fuller<S: IntoIterator<Item = f64>>(
             Ok(ADFCheck {
                 criterion,
                 gamma,
+                bic,
+                lag,
+                regression: solution,
+            })
+        }
+        None => Err("No lag value generated a regression solution.".to_string()),
+    }
+}
+
+#[derive(Debug)]
+pub struct JohansenCheck {
+    pub trace_statistic: f64,
+    pub max_eigenvalue_statistic: f64,
+    pub estimated_rank: usize,
+    pub pi: Array2<f64>,
+    pub bic: f64,
+    pub lag: usize,
+    pub regression: RegressionSolution,
+}
+
+pub fn check_johansen(timeline: Array1<f64>, series: Array2<f64>) -> Result<JohansenCheck, String> {
+    let n_samples = series.shape()[0];
+
+    if timeline.len() != n_samples {
+        return Err(format!(
+            "Passed different length timeline ({}) and series data ({}) during Johansen check.",
+            timeline.len(),
+            n_samples
+        ));
+    }
+
+    match (0..MAX_LAG).fold(
+        None,
+        |acc: Option<(f64, RegressionSolution, usize)>, lag| {
+            let solution = match autoregress(lag, timeline.view(), series.view()) {
+                Ok(sol) => sol,
+                Err(_) => return acc,
+            };
+
+            let bic = solution.bayesian_information_criterion();
+            match acc {
+                Some(tuple) => {
+                    if bic < tuple.0 {
+                        Some((bic, solution, lag))
+                    } else {
+                        Some(tuple)
+                    }
+                }
+                None => Some((bic, solution, lag)),
+            }
+        },
+    ) {
+        Some(sol) => {
+            let (bic, solution, lag) = sol;
+            let pi = solution
+                .solution
+                .slice(s![2..(2 + series.shape()[1]), ..])
+                .t()
+                .to_owned();
+            let mut svd: Vec<f64> = match pi.clone().svd_into(false, false) {
+                Ok((_, svd, _)) => svd.into_iter().collect::<Vec<_>>(),
+                Err(message) => {
+                    return Err(format!(
+                        "Failed the singular value decomposition in the Johansen test result:\n {:?}",
+                        message
+                    ));
+                }
+            };
+            svd.sort_by(|l, r| l.total_cmp(r));
+
+            let n_samples = solution.residuals.shape()[0] as f64;
+            let mut hypothesis = (svd.len(), 0.0, 0.0);
+            for i_rank in 0..(svd.len() - 1) {
+                let max = -n_samples * (1.0 - svd[i_rank + 1]).ln();
+                let trace = -n_samples
+                    * (&svd[(i_rank + 1)..])
+                        .iter()
+                        .map(|val| (1.0 - *val).ln())
+                        .sum::<f64>();
+                let n_freedom: f64 = (svd.len() - i_rank) as f64;
+                let critical_trace_val = match ChiSquared::new(2.0 * n_freedom.powf(2.0)) {
+                    Ok(distribution) => {
+                        (0.85 - 0.58 / (2.0 * n_freedom.powf(2.0))) * distribution.inverse_cdf(0.9)
+                    }
+                    Err(message) => {
+                        return Err(format!(
+                            "Failed to compute critical value in Johansen test:\n{:?}",
+                            message
+                        ));
+                    }
+                };
+                println!("Johansen crit val: {}", critical_trace_val);
+
+                if trace < critical_trace_val {
+                    hypothesis = (i_rank, max, trace);
+                    break;
+                }
+            }
+            Ok(JohansenCheck {
+                estimated_rank: hypothesis.0,
+                max_eigenvalue_statistic: hypothesis.1,
+                trace_statistic: hypothesis.2,
+                pi,
                 bic,
                 lag,
                 regression: solution,
