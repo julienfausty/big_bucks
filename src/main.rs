@@ -11,6 +11,7 @@ mod interp;
 use interp::rebase;
 
 mod regression;
+use regression::check_augmented_dicky_fuller;
 
 fn plot_simple_normalized_prices(prices: Vec<Vec<(u64, f64)>>) {
     let prices: Vec<_> = prices
@@ -180,7 +181,24 @@ async fn main() -> Result<(), String> {
 
     let rebased = rebase(wrapped).expect("Failed to rebase charts onto single timeline.");
 
-    plot_scatter_w_histograms(rebased.series);
+    plot_scatter_w_histograms(rebased.series.clone());
+
+    let adf_checks: Vec<_> = vec![
+        (
+            rebased.time.map(|t| *t as f64),
+            rebased.series.slice(s![.., 0]).to_owned(),
+        ),
+        (
+            rebased.time.map(|t| *t as f64),
+            rebased.series.slice(s![.., 1]).to_owned(),
+        ),
+    ]
+    .into_iter()
+    .map(|(time_view, val_view)| check_augmented_dicky_fuller(time_view, val_view).unwrap())
+    .collect();
+
+    println!("Bitcoin ADF check: \n{:?}\n", adf_checks[0]);
+    println!("Ethereum ADF check: \n{:?}", adf_checks[1]);
 
     Ok(())
 }
