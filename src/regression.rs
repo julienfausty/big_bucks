@@ -238,20 +238,21 @@ pub fn check_johansen(timeline: Array1<f64>, series: Array2<f64>) -> Result<Joha
                 }
             };
             svd.sort_by(|l, r| l.total_cmp(r));
+            let svd: Vec<f64> = svd.into_iter().rev().collect();
 
             let n_samples = solution.residuals.shape()[0] as f64;
             let mut hypothesis = (svd.len(), 0.0, 0.0);
-            for i_rank in 0..(svd.len() - 1) {
-                let max = -n_samples * (1.0 - svd[i_rank + 1]).ln();
+            for i_rank in 0..svd.len() {
+                let max = -n_samples * (1.0 - svd[i_rank]).ln();
                 let trace = -n_samples
-                    * (&svd[(i_rank + 1)..])
+                    * (&svd[i_rank..])
                         .iter()
                         .map(|val| (1.0 - *val).ln())
                         .sum::<f64>();
                 let n_freedom: f64 = (svd.len() - i_rank) as f64;
                 let critical_trace_val = match ChiSquared::new(2.0 * n_freedom.powf(2.0)) {
                     Ok(distribution) => {
-                        (0.85 - 0.58 / (2.0 * n_freedom.powf(2.0))) * distribution.inverse_cdf(0.9)
+                        (0.85 - 0.58 / (2.0 * n_freedom.powf(2.0))) * distribution.inverse_cdf(0.99)
                     }
                     Err(message) => {
                         return Err(format!(
@@ -260,7 +261,6 @@ pub fn check_johansen(timeline: Array1<f64>, series: Array2<f64>) -> Result<Joha
                         ));
                     }
                 };
-                println!("Johansen crit val: {}", critical_trace_val);
 
                 if trace < critical_trace_val {
                     hypothesis = (i_rank, max, trace);
@@ -572,5 +572,76 @@ mod tests {
         let expected_tolerance = 1.0 / (length as f64).sqrt();
         assert!(checked.gamma.powf(2.0) < expected_tolerance);
         assert_eq!(checked.lag, 0);
+    }
+
+    #[test]
+    fn test_johansen_cointegrated_2() {
+        let length = 100000;
+        let timeline = Array1::<f64>::linspace(0.0, 1.0, length);
+        let mut series: Array2<f64> = Array::random((length, 3), Normal::new(0.0, 1.0).unwrap())
+            + timeline
+                .clone()
+                .to_shape((length, 1))
+                .unwrap()
+                .dot(&Array2::from_shape_vec((1, 3), vec![1.1, 0.2, 5.3]).unwrap())
+            + 3.14;
+
+        for i_series in 0..(length - 1) {
+            series[[i_series + 1, 0]] += series[[i_series, 0]];
+            series[[i_series + 1, 1]] += 1.3 * series[[i_series, 0]];
+            series[[i_series + 1, 2]] += 0.2 * series[[i_series, 0]];
+        }
+
+        let checked = check_johansen(timeline, series);
+
+        assert!(checked.is_ok());
+
+        let checked = checked.unwrap();
+
+        assert!(checked.estimated_rank == 2);
+    }
+
+    #[test]
+    fn test_johansen_cointegrated_1() {
+        let length = 1000000;
+        let timeline = Array1::<f64>::linspace(0.0, 1.0, length);
+        let mut series: Array2<f64> =
+            Array::random((length, 3), Normal::new(0.0, 1.0).unwrap()) + 3.14;
+
+        for i_series in 0..(length - 1) {
+            series[[i_series + 1, 0]] += series[[i_series, 0]];
+            series[[i_series + 1, 1]] += 1.3 * series[[i_series, 0]];
+            series[[i_series + 1, 2]] += series[[i_series, 2]];
+        }
+
+        let checked = check_johansen(timeline, series);
+
+        assert!(checked.is_ok());
+
+        let checked = checked.unwrap();
+
+        assert!(checked.estimated_rank == 1);
+    }
+
+    #[test]
+    fn test_johansen_not_cointegrated() {
+        let length = 1000000;
+        let timeline = Array1::<f64>::linspace(0.0, 1.0, length);
+        let mut series: Array2<f64> =
+            Array::random((length, 3), Normal::new(0.0, 1.0).unwrap()) + 3.14;
+
+        for i_series in 0..(length - 1) {
+            series[[i_series + 1, 0]] += series[[i_series, 0]];
+            series[[i_series + 1, 1]] += series[[i_series, 1]];
+            series[[i_series + 1, 2]] += series[[i_series, 2]];
+        }
+
+        let checked = check_johansen(timeline, series);
+
+        assert!(checked.is_ok());
+
+        let checked = checked.unwrap();
+
+        assert!(checked.estimated_rank == 0);
     }
 }
