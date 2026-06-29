@@ -11,7 +11,7 @@ mod interp;
 use interp::rebase;
 
 mod regression;
-use regression::check_augmented_dicky_fuller;
+use regression::{check_augmented_dicky_fuller, check_johansen};
 
 const ADF_THRESHOLD: f64 = -0.5;
 
@@ -264,20 +264,19 @@ async fn main() -> Result<(), String> {
     .collect();
 
     println!("Bitcoin ADF check: \n{:?}\n", adf_checks[0].criterion);
-    println!("Ethereum ADF check: \n{:?}", adf_checks[1].criterion);
+    println!("Ethereum ADF check: \n{:?}\n", adf_checks[1].criterion);
 
     if adf_checks[0].criterion < ADF_THRESHOLD || adf_checks[1].criterion < ADF_THRESHOLD {
         return Err("Failed integrated of order 1 checks for one of the series.".to_string());
     }
 
-    plot_histograms(
-        adf_checks
-            .into_iter()
-            .map(|check| {
-                check.regression.residuals.flatten().to_owned() / check.regression.variance.sqrt()
-            })
-            .collect(),
+    let johansen_check = check_johansen(rebased.time.map(|t| *t as f64), rebased.series.clone())
+        .expect("Failed to run Johansen test on series.");
+    println!(
+        "Number of estimated cointegration relationships: {}",
+        johansen_check.estimated_rank
     );
+    println!("Optimized lag: {}", johansen_check.lag);
 
     Ok(())
 }
