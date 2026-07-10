@@ -3,6 +3,7 @@ use ndarray_linalg::SVDInto;
 use statrs::distribution::{ChiSquared, ContinuousCDF};
 
 use std::f64::consts::PI;
+use std::iter::zip;
 
 const MAX_LAG: usize = 20;
 const EPS: f64 = 1e-16;
@@ -187,6 +188,57 @@ pub struct JohansenCheck {
     pub bic: f64,
     pub lag: usize,
     pub regression: RegressionSolution,
+}
+
+impl JohansenCheck {
+    pub fn factor_error_correction(&self) -> Result<(Array2<f64>, Array2<f64>), String> {
+        let rank = self.estimated_rank;
+        let linear_map = self.pi.clone();
+
+        let base_dim = linear_map.shape()[1];
+
+        if rank > base_dim {
+            return Err(format!(
+                "Provided rank was above base_dim: {} > {}",
+                rank, base_dim
+            ));
+        }
+
+        let (u, svd, vt) = match linear_map.svd_into(true, true) {
+            Ok((Some(u), svd, Some(vt))) => (u, svd, vt),
+            Ok((None, _, _)) => return Err("Did not get vt in SVD decomposition.".to_string()),
+            Ok((_, _, None)) => return Err("Did not get vt in SVD decomposition.".to_string()),
+            Err(message) => {
+                return Err(format!(
+                    "Failed the SVD when looking for cointegration relationship:\n{}",
+                    message
+                ));
+            }
+        };
+
+        let mut potentials = zip(
+            zip(u.columns().into_iter(), svd.into_iter()),
+            vt.rows().into_iter(),
+        )
+        .map(|((col, val), row)| (col.to_owned() * row[0], val, row.to_owned() / row[0]))
+        .collect::<Vec<_>>();
+
+        potentials.sort_by(|l, r| l.1.total_cmp(&r.1));
+        let potentials = potentials.into_iter().rev().collect::<Vec<_>>();
+
+        let mut relationships = Array2::<f64>::zeros((rank, base_dim));
+        let mut adjustments = Array2::<f64>::zeros((base_dim, rank));
+        for i_rank in 0..rank {
+            relationships
+                .slice_mut(s![i_rank, ..])
+                .assign(&(potentials[i_rank].2.clone()));
+            adjustments
+                .slice_mut(s![.., i_rank])
+                .assign(&(potentials[i_rank].0.clone() * potentials[i_rank].1));
+        }
+
+        Ok((adjustments, relationships))
+    }
 }
 
 pub fn check_johansen(timeline: Array1<f64>, series: Array2<f64>) -> Result<JohansenCheck, String> {

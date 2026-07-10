@@ -1,7 +1,6 @@
 use core::f64;
 
 use ndarray::{Array1, Array2, s};
-use ndarray_linalg::SVDInto;
 
 use plotters::prelude::*;
 
@@ -14,7 +13,7 @@ mod interp;
 use interp::rebase;
 
 mod regression;
-use regression::{autoregress, check_augmented_dicky_fuller, check_johansen};
+use regression::{check_augmented_dicky_fuller, check_johansen};
 
 const ADF_THRESHOLD: f64 = -2.0;
 
@@ -222,55 +221,6 @@ fn plot_histograms(values: Vec<Array1<f64>>) {
     }
 }
 
-fn factor_error_correction(
-    rank: usize,
-    linear_map: Array2<f64>,
-) -> Result<(Array2<f64>, Array2<f64>), String> {
-    let base_dim = linear_map.shape()[1];
-
-    if rank > base_dim {
-        return Err(format!(
-            "Provided rank was above base_dim: {} > {}",
-            rank, base_dim
-        ));
-    }
-
-    let (u, svd, vt) = match linear_map.svd_into(true, true) {
-        Ok((Some(u), svd, Some(vt))) => (u, svd, vt),
-        Ok((None, _, _)) => return Err("Did not get vt in SVD decomposition.".to_string()),
-        Ok((_, _, None)) => return Err("Did not get vt in SVD decomposition.".to_string()),
-        Err(message) => {
-            return Err(format!(
-                "Failed the SVD when looking for cointegration relationship:\n{}",
-                message
-            ));
-        }
-    };
-
-    let mut potentials = zip(
-        zip(u.columns().into_iter(), svd.into_iter()),
-        vt.rows().into_iter(),
-    )
-    .map(|((col, val), row)| (col.to_owned() * row[0], val, row.to_owned() / row[0]))
-    .collect::<Vec<_>>();
-
-    potentials.sort_by(|l, r| l.1.total_cmp(&r.1));
-    let potentials = potentials.into_iter().rev().collect::<Vec<_>>();
-
-    let mut relationships = Array2::<f64>::zeros((rank, base_dim));
-    let mut adjustments = Array2::<f64>::zeros((base_dim, rank));
-    for i_rank in 0..rank {
-        relationships
-            .slice_mut(s![i_rank, ..])
-            .assign(&(potentials[i_rank].2.clone()));
-        adjustments
-            .slice_mut(s![.., i_rank])
-            .assign(&(potentials[i_rank].0.clone() * potentials[i_rank].1));
-    }
-
-    Ok((adjustments, relationships))
-}
-
 fn plot_spread(time: Array1<f64>, invariant: Array1<f64>) {
     let x_range = time.fold((f64::INFINITY, 0.0), |acc, val| {
         (val.min(acc.0), val.max(acc.1))
@@ -393,8 +343,7 @@ async fn main() -> Result<(), String> {
     println!("Optimized lag: {}", johansen_check.lag);
 
     let (adjustment_vectors, cointegration_relationships) =
-        factor_error_correction(johansen_check.estimated_rank, johansen_check.pi.to_owned())
-            .unwrap();
+        johansen_check.factor_error_correction().unwrap();
 
     println!("Cointegration vector {:?}", cointegration_relationships);
 
