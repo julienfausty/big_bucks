@@ -21,5 +21,9 @@ path = "src/lib.rs"
 name = "explore"
 path = "src/explore.rs"
 
+[[bin]]
+name = "trade"
+path = "src/trade.rs"
+
 [dev-dependencies]
 ndarray-rand = "0.16.0"
