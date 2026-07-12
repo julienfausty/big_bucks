@@ -13,5 +13,13 @@ serde_json = "1.0.150"
 statrs = "0.18.0"
 tokio = { version = "1.52.3", features = ["full"] }
 
+[lib]
+name = "big_bucks"
+path = "src/lib.rs"
+
+[[bin]]
+name = "explore"
+path = "src/explore.rs"
+
 [dev-dependencies]
 ndarray-rand = "0.16.0"
