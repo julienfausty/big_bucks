@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+log = { version = "0.4.33", features = ["kv", "kv_serde", "kv_std", "serde", "std"] }
 ndarray = { version = "0.17.2", features = ["rayon", "serde", "blas"] }
 ndarray-linalg = { version = "0.18.1", features = ["openblas-static"] }
 plotters = "0.3.7"
@@ -12,6 +13,9 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 statrs = "0.18.0"
 tokio = { version = "1.52.3", features = ["full"] }
+tracing = "0.1.44"
+tracing-log = "0.2.0"
+tracing-subscriber = { version = "0.3.23", features = ["json", "serde", "serde_json"] }
 
 [lib]
 name = "big_bucks"
