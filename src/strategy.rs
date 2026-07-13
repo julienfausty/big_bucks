@@ -89,7 +89,7 @@ impl StatArbModel {
             time_slope,
             relationship: (
                 cointegration_relationships[[0, 0]],
-                cointegration_relationships[[1, 0]],
+                cointegration_relationships[[0, 1]],
             ),
             mean,
             deviation,
