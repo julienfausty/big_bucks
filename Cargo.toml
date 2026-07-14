@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+kraken-async-rs = "0.15.0"
 log = { version = "0.4.33", features = ["kv", "kv_serde", "kv_std", "serde", "std"] }
 ndarray = { version = "0.17.2", features = ["rayon", "serde", "blas"] }
 ndarray-linalg = { version = "0.18.1", features = ["openblas-static"] }
