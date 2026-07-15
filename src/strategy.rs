@@ -99,6 +99,7 @@ impl StatArbModel {
     pub fn signal(&self, t: u64, prices: (f64, f64)) -> StatArbSignal {
         StatArbSignal {
             assets: self.assets.clone(),
+            prices,
             z_score: ((self.intercept - self.mean)
                 + self.time_slope * (t as f64)
                 + self.relationship.0 * prices.0
@@ -151,13 +152,13 @@ impl StatArbPolicy {
                         let short = -volume / 2.0;
                         if score.z_score < 0.0 {
                             Some(vec![
-                                Order::Open((score.assets.0, long)),
-                                Order::Open((score.assets.1, short)),
+                                Order::Open((score.assets.0, long / score.prices.0)),
+                                Order::Open((score.assets.1, short / score.prices.1)),
                             ])
                         } else {
                             Some(vec![
-                                Order::Open((score.assets.0, short)),
-                                Order::Open((score.assets.1, long)),
+                                Order::Open((score.assets.0, short / score.prices.0)),
+                                Order::Open((score.assets.1, long / score.prices.1)),
                             ])
                         }
                     }
