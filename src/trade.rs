@@ -3,6 +3,8 @@ use tracing::Level;
 use tracing_log;
 use tracing_subscriber;
 
+use dotenv;
+
 use serde::{Deserialize, Serialize};
 
 use tokio::sync::watch;
@@ -10,7 +12,9 @@ use tokio::time::{Duration, sleep};
 
 use std::collections::HashMap;
 
-use big_bucks::fetch::{MarketChartQuery, PricePairPipe, query_market_chart};
+use big_bucks::fetch::{
+    MarketChartQuery, PricePairPipe, fetch_kraken_account_data, query_market_chart,
+};
 use big_bucks::interp::{RebasedSeries, rebase};
 use big_bucks::orders::{Confirmation, Order};
 use big_bucks::signals::Signal;
@@ -27,7 +31,7 @@ struct Account {}
 
 impl Account {
     pub async fn state(&self) -> Result<(f64, HashMap<String, f64>), String> {
-        Ok((100.0, HashMap::new()))
+        fetch_kraken_account_data().await
     }
     pub async fn execute(&self, order: Order) -> Result<Confirmation, String> {
         Ok(Confirmation(order))
@@ -109,6 +113,8 @@ impl ModelPipe {
 
 #[tokio::main]
 async fn main() -> Result<(), String> {
+    dotenv::dotenv().ok();
+
     tracing_subscriber::fmt()
         .with_writer(std::io::stdout)
         .with_max_level(Level::INFO)

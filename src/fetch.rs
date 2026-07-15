@@ -1,3 +1,4 @@
+use kraken_async_rs::crypto::signatures::generate_signature;
 use kraken_async_rs::wss::{
     ChannelMessage, KrakenMessageStream, KrakenWSSClient, Message, Ticker, TickerSubscription,
     WS_KRAKEN, WS_KRAKEN_AUTH, WssMessage,
@@ -204,4 +205,67 @@ impl PricePairPipe {
             Err(message) => Err(format!("{}", message)),
         }
     }
+}
+
+pub async fn fetch_kraken_account_data() -> Result<(f64, HashMap<String, f64>), String> {
+    let url = match reqwest::Url::parse("https://futures.kraken.com/derivatives/api/v3/accounts") {
+        Ok(url) => url,
+        Err(message) => {
+            return Err(format!(
+                "Failed to create Kraken get account URL:\n{}",
+                message
+            ));
+        }
+    };
+
+    let secret = match std::env::var("KRAKEN_FUTURES_API_SECRET") {
+        Ok(key) => key,
+        Err(message) => {
+            return Err(format!(
+                "Failed to find KRAKEN_FUTURES_API_SECRET environment variable:\n{}",
+                message
+            ));
+        }
+    };
+
+    let nonce = match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration.as_millis() as u64,
+        Err(message) => {
+            return Err(format!(
+                "Could not determine current timestamp:\n{}",
+                message
+            ));
+        }
+    };
+
+    let signature = generate_signature(nonce.clone(), &secret, "/api/v3/accounts", "".to_string());
+
+    match reqwest::Client::new()
+        .get(url)
+        .header("User-Agent", "big_bucks 0.1")
+        .header(
+            "APIKey",
+            match std::env::var("KRAKEN_FUTURES_API_KEY") {
+                Ok(key) => key,
+                Err(message) => {
+                    return Err(format!(
+                        "Failed to find KRAKEN_FUTURES_API_KEY environment variable:\n{}",
+                        message
+                    ));
+                }
+            },
+        )
+        .header("Authent", signature.signature)
+        .header("Nonce", nonce)
+        .send()
+        .await
+    {
+        Ok(response) => Ok::<(), String>(match response.text().await {
+            Ok(body) => log::info!("{}", body),
+            Err(message) => return Err(format!("{}", message)),
+        }),
+        Err(message) => return Err(format!("{}", message)),
+    };
+
+    Ok((100.0, HashMap::new()))
 }
