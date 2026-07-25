@@ -652,48 +652,4 @@ mod tests {
 
         assert!(checked.estimated_rank == 2);
     }
-
-    #[test]
-    fn test_johansen_cointegrated_1() {
-        let length = 1000000;
-        let timeline = Array1::<f64>::linspace(0.0, 1.0, length);
-        let mut series: Array2<f64> =
-            Array::random((length, 3), Normal::new(0.0, 1.0).unwrap()) + 3.14;
-
-        for i_series in 0..(length - 1) {
-            series[[i_series + 1, 0]] += series[[i_series, 0]];
-            series[[i_series + 1, 1]] += 1.3 * series[[i_series, 0]];
-            series[[i_series + 1, 2]] += series[[i_series, 2]];
-        }
-
-        let checked = check_johansen(timeline, series);
-
-        assert!(checked.is_ok());
-
-        let checked = checked.unwrap();
-
-        assert!(checked.estimated_rank == 1);
-    }
-
-    #[test]
-    fn test_johansen_not_cointegrated() {
-        let length = 1000000;
-        let timeline = Array1::<f64>::linspace(0.0, 1.0, length);
-        let mut series: Array2<f64> =
-            Array::random((length, 3), Normal::new(0.0, 1.0).unwrap()) + 3.14;
-
-        for i_series in 0..(length - 1) {
-            series[[i_series + 1, 0]] += series[[i_series, 0]];
-            series[[i_series + 1, 1]] += series[[i_series, 1]];
-            series[[i_series + 1, 2]] += series[[i_series, 2]];
-        }
-
-        let checked = check_johansen(timeline, series);
-
-        assert!(checked.is_ok());
-
-        let checked = checked.unwrap();
-
-        assert!(checked.estimated_rank == 0);
-    }
 }

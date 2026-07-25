@@ -6,14 +6,9 @@ use plotters::prelude::*;
 
 use std::iter::zip;
 
-mod fetch;
-use fetch::{MarketChartQuery, query_market_chart};
-
-mod interp;
-use interp::rebase;
-
-mod regression;
-use regression::{check_augmented_dicky_fuller, check_johansen};
+use big_bucks::{
+    MarketChartQuery, check_augmented_dicky_fuller, check_johansen, query_market_chart, rebase,
+};
 
 const ADF_THRESHOLD: f64 = -2.0;
 
